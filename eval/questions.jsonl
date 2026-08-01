@@ -1,0 +1,12 @@
+{"id":"httpx-client-request","repo":"httpx","question":"How does an HTTPX Client build and send a request?","relevant_paths":["httpx/_client.py","httpx/_api.py"]}
+{"id":"httpx-timeout","repo":"httpx","question":"Where is timeout configuration defined and how is it applied to requests?","relevant_paths":["httpx/_config.py","httpx/_client.py"]}
+{"id":"httpx-auth","repo":"httpx","question":"How does HTTPX handle authentication flows when sending a request?","relevant_paths":["httpx/_auth.py","httpx/_client.py"]}
+{"id":"httpx-proxy","repo":"httpx","question":"How does HTTPX support forwarding and tunneling through an HTTP proxy?","relevant_paths":["docs/advanced/proxies.md","httpx/_transports"]}
+{"id":"httpx-streaming","repo":"httpx","question":"How can a caller stream an HTTPX response instead of loading it all at once?","relevant_paths":["httpx/_client.py","docs/advanced/stream.md"]}
+{"id":"httpx-exceptions","repo":"httpx","question":"What exception types can HTTPX raise for request and response errors?","relevant_paths":["httpx/_exceptions.py","docs/exceptions.md"]}
+{"id":"requests-request-api","repo":"requests","question":"How does requests.get or requests.request construct and send a request?","relevant_paths":["src/requests/api.py","src/requests/sessions.py"]}
+{"id":"requests-session","repo":"requests","question":"What is the purpose of a Requests Session and how does it preserve settings?","relevant_paths":["src/requests/sessions.py","docs/user/advanced.rst"]}
+{"id":"requests-auth","repo":"requests","question":"How does Requests apply authentication to prepared requests?","relevant_paths":["src/requests/auth.py","src/requests/models.py"]}
+{"id":"requests-timeout","repo":"requests","question":"How does Requests handle the timeout argument and timeout errors?","relevant_paths":["src/requests/api.py","src/requests/sessions.py","src/requests/exceptions.py"]}
+{"id":"requests-redirects","repo":"requests","question":"How does Requests handle redirects and the allow_redirects option?","relevant_paths":["src/requests/sessions.py","src/requests/models.py"]}
+{"id":"requests-cookies","repo":"requests","question":"How are cookies stored and prepared in Requests?","relevant_paths":["src/requests/cookies.py","src/requests/sessions.py"]}

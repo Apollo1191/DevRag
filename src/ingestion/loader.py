@@ -75,12 +75,7 @@ class RepositoryLoader:
         # Use the system git client for a shallow clone to keep the first pass simple.
         logger.info("Cloning %s into %s", repo_url, target_path)
         try:
-            subprocess.run(
-                ["git", "clone", "--depth", "1", repo_url, str(target_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            self._run_git(["git", "clone", "--depth", "1", repo_url, str(target_path)])
         except subprocess.CalledProcessError as exc:
             logger.exception("Failed to clone repository: %s", repo_url)
             raise RepositoryLoaderError(
@@ -144,3 +139,16 @@ class RepositoryLoader:
             raise RepositoryLoaderError(f"Could not derive repository name from {repo_url}")
 
         return repo_name
+
+    @staticmethod
+    def _run_git(command: list[str]) -> subprocess.CompletedProcess[str]:
+        """Run a git command with UTF-8 decoding to avoid locale issues on Windows."""
+
+        return subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )

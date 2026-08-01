@@ -1,0 +1,24 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+devrag.egg-info/
+.pytest_cache/
+
+# Node / UI
+ui/node_modules/
+ui/dist/
+
+# Runtime data
+storage/
+workspaces/
+
+# Docs and local artifacts
+eval/*report*.json
+/package-lock.json
+
