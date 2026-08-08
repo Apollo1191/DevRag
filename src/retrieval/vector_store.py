@@ -20,7 +20,7 @@ class VectorStoreProtocol(Protocol):
     def add(self, embeddings: Iterable[Iterable[float]], texts: Iterable[str], metadatas: Iterable[dict]) -> None:
         ...
 
-    def search(self, embedding: Iterable[float], top_k: int = 5) -> list[SearchResult]:
+    def search(self, embedding: Iterable[float], top_k: int = 5, repository: str | None = None) -> list[SearchResult]:
         ...
 
     def save(self, directory: Path) -> None:
@@ -33,6 +33,9 @@ class VectorStoreProtocol(Protocol):
         ...
 
     def clear(self) -> None:
+        ...
+
+    def clear_repository(self, repository: str) -> None:
         ...
 
     def get_all(self, batch_size: int = 256) -> list[SearchResult]:
@@ -58,6 +61,7 @@ class VectorStore:
         self.index = faiss.IndexFlatIP(dimension)
         self._texts: list[str] = []
         self._metadatas: list[dict] = []
+        self._vectors: list[list[float]] = []
 
     def add(self, embeddings: Iterable[Iterable[float]], texts: Iterable[str], metadatas: Iterable[dict]) -> None:
         """Add a batch of embeddings with texts and metadata."""
@@ -75,19 +79,34 @@ class VectorStore:
         self.index.add(vectors)
         self._texts.extend(texts_list)
         self._metadatas.extend(metadatas_list)
+        self._vectors.extend(vectors.tolist())
 
-    def search(self, embedding: Iterable[float], top_k: int = 5) -> list[SearchResult]:
+    def search(
+        self,
+        embedding: Iterable[float],
+        top_k: int = 5,
+        repository: str | None = None,
+    ) -> list[SearchResult]:
         """Search the index and return the top-k results."""
 
         vector = np.array([list(embedding)], dtype=np.float32)
         self._normalize(vector)
-        scores, indices = self.index.search(vector, top_k)
+        # FAISS cannot filter an IndexFlatIP query, so over-fetch and apply the
+        # repository filter while preserving global score order.
+        search_k = self.index.ntotal if repository else top_k
+        if search_k <= 0:
+            return []
+        scores, indices = self.index.search(vector, search_k)
 
         results: list[SearchResult] = []
         for score, idx in zip(scores[0], indices[0]):
             if idx < 0:
                 continue
+            if repository and self._metadatas[idx].get("source_repo") != repository:
+                continue
             results.append(SearchResult(text=self._texts[idx], metadata=self._metadatas[idx], score=float(score)))
+            if len(results) >= top_k:
+                break
         return results
 
     def save(self, directory: Path) -> None:
@@ -124,6 +143,7 @@ class VectorStore:
                 record = json.loads(line)
                 store._texts.append(record["text"])
                 store._metadatas.append(record["metadata"])
+            store._vectors = [index.reconstruct(index_id).tolist() for index_id in range(index.ntotal)]
 
         return store
 
@@ -149,6 +169,22 @@ class VectorStore:
         self.index = faiss.IndexFlatIP(self.dimension)
         self._texts.clear()
         self._metadatas.clear()
+        self._vectors.clear()
+
+    def clear_repository(self, repository: str) -> None:
+        """Remove all items belonging to one repository."""
+
+        kept = [
+            (vector, text, meta)
+            for vector, text, meta in zip(self._vectors, self._texts, self._metadatas)
+            if meta.get("source_repo") != repository
+        ]
+        self.index = faiss.IndexFlatIP(self.dimension)
+        self._texts = []
+        self._metadatas = []
+        self._vectors = []
+        if kept:
+            self.add(embeddings=[vector for vector, _, _ in kept], texts=[text for _, text, _ in kept], metadatas=[meta for _, _, meta in kept])
 
     @staticmethod
     def _normalize(vectors: np.ndarray) -> None:

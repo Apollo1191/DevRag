@@ -62,29 +62,14 @@ _reranker: RerankerWrapper | None = None
 _jobs: dict[str, asyncio.Task] = {}
 _job_results: dict[str, dict] = {}
 _MIN_VECTOR_RELEVANCE = float(os.getenv("DEVRAG_MIN_VECTOR_RELEVANCE", "0.55"))
-_CASUAL_MESSAGES = {
-    "hi",
-    "hello",
-    "hey",
-    "สวัสดี",
-    "หวัดดี",
-    "ขอบคุณ",
-    "thanks",
-    "thank you",
-    "bye",
-    "ลาก่อน",
-}
 
 
-def _is_casual_message(question: str) -> bool:
-    """Recognize short greetings, thanks, and goodbyes without retrieval."""
+def _no_results_answer(question: str) -> str:
+    """Return a concise no-evidence response in the question's language."""
 
-    normalized = re.sub(r"[^\w\u0E00-\u0E7F ]+", "", question.lower()).strip()
-    return normalized in _CASUAL_MESSAGES or any(
-        normalized.startswith(f"{prefix} ")
-        for prefix in _CASUAL_MESSAGES
-        if len(prefix) >= 4
-    )
+    if re.search(r"[\u0E00-\u0E7F]", question):
+        return "ไม่พบข้อมูลที่เกี่ยวข้องเพียงพอใน repository ที่ทำดัชนีไว้เพื่อให้ตอบได้อย่างน่าเชื่อถือ"
+    return "I could not find enough relevant information in the indexed repository to answer reliably."
 
 
 _TOPIC_STOPWORDS = {
@@ -410,16 +395,6 @@ async def index_info():
 
 @app.post("/query", response_model=QueryResponse)
 async def query(payload: QueryRequest) -> QueryResponse:
-    normalized_question = " ".join(payload.question.strip().lower().split())
-    if _is_casual_message(normalized_question):
-        return QueryResponse(
-            answer=(
-                "สวัสดีครับ ผมช่วยตอบคำถามเกี่ยวกับโค้ดและเอกสารที่อยู่ใน repository "
-                "ที่ทำดัชนีไว้ได้ครับ มีอะไรให้ช่วยค้นหาไหม?"
-            ),
-            chunks=[],
-        )
-
     pipeline = _get_pipeline()
     if pipeline.store is None:
         raise HTTPException(status_code=400, detail="No data indexed. Call /ingest first.")
@@ -428,8 +403,16 @@ async def query(payload: QueryRequest) -> QueryResponse:
     query_embedding = (await embedder.embed_texts([payload.question]))[0]
     
     # Perform hybrid search: vector + BM25
-    vector_results = pipeline.store.search(query_embedding, top_k=payload.top_k * 4)
-    bm25_results = pipeline.bm25_store.search(payload.question, top_k=payload.top_k * 4)
+    vector_results = pipeline.store.search(
+        query_embedding,
+        top_k=payload.top_k * 4,
+        repository=payload.repository,
+    )
+    bm25_results = pipeline.bm25_store.search(
+        payload.question,
+        top_k=payload.top_k * 4,
+        repository=payload.repository,
+    )
     
     # Convert to tuples for RRF
     vector_tuples = [(r.text, r.metadata, r.score) for r in vector_results]
@@ -457,10 +440,7 @@ async def query(payload: QueryRequest) -> QueryResponse:
 
     answer = None
     if not results:
-        answer = (
-            "I could not find enough relevant information in the indexed sources "
-            "to answer that reliably. ลองถามเกี่ยวกับเนื้อหาใน repository ที่ index ไว้ได้เลยครับ"
-        )
+        answer = _no_results_answer(payload.question)
     elif payload.use_llm:
         template = load_prompt_template(PROMPT_PATH)
         system_prompt, user_prompt = build_prompt(payload.question, results, template)

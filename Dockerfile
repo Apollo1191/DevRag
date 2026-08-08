@@ -16,7 +16,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY src ./src
 COPY prompts ./prompts
-COPY workspaces ./workspaces
 
 # Create storage directory for FAISS index
 RUN mkdir -p storage

@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import Distance, FieldCondition, Filter, MatchValue, PointStruct, VectorParams
 
 from .models import SearchResult
 
@@ -59,9 +60,19 @@ class QdrantVectorStore:
 
         points: list[PointStruct] = []
         for vector, text, metadata in zip(vectors, texts_list, metadatas_list):
+            stable_key = "|".join(
+                [
+                    str(metadata.get("source_repo", "")),
+                    str(metadata.get("relative_path", "")),
+                    str(metadata.get("start_line", "")),
+                    str(metadata.get("end_line", "")),
+                    text,
+                ]
+            )
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, hashlib.sha256(stable_key.encode("utf8")).hexdigest()))
             points.append(
                 PointStruct(
-                    id=str(uuid.uuid4()),
+                    id=point_id,
                     vector=list(vector),
                     payload={"text": text, "metadata": metadata},
                 )
@@ -69,7 +80,7 @@ class QdrantVectorStore:
 
         self.client.upsert(collection_name=self.collection_name, points=points)
 
-    def search(self, embedding: Iterable[float], top_k: int = 5) -> List[SearchResult]:
+    def search(self, embedding: Iterable[float], top_k: int = 5, repository: str | None = None) -> List[SearchResult]:
         """Search Qdrant and return top-k matching chunks."""
 
         vector = list(embedding)
@@ -77,6 +88,7 @@ class QdrantVectorStore:
             collection_name=self.collection_name,
             query_vector=vector,
             limit=top_k,
+            query_filter=self._repository_filter(repository),
             with_payload=True,
         )
 
@@ -87,6 +99,12 @@ class QdrantVectorStore:
             metadata = payload.get("metadata", {})
             results.append(SearchResult(text=text, metadata=metadata, score=float(hit.score or 0.0)))
         return results
+
+    @staticmethod
+    def _repository_filter(repository: str | None) -> Filter | None:
+        if not repository:
+            return None
+        return Filter(must=[FieldCondition(key="metadata.source_repo", match=MatchValue(value=repository))])
 
     def save(self, directory: Path) -> None:
         """Qdrant persists data internally, so this is a no-op."""
@@ -102,6 +120,16 @@ class QdrantVectorStore:
         self.client.recreate_collection(
             collection_name=self.collection_name,
             vectors_config=VectorParams(size=self.dimension, distance=Distance.COSINE),
+        )
+
+    def clear_repository(self, repository: str) -> None:
+        """Delete all points belonging to one repository."""
+
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=Filter(
+                must=[FieldCondition(key="metadata.source_repo", match=MatchValue(value=repository))]
+            ),
         )
 
     def get_samples(self, max_samples: int = 5) -> list[SearchResult]:

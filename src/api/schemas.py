@@ -65,6 +65,7 @@ class QueryRequest(BaseModel):
     question: str
     top_k: int = Field(default=5, ge=1, le=20)
     use_llm: bool = True
+    repository: str | None = None
 
 
 class ChunkResult(BaseModel):

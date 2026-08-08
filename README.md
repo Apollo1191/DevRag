@@ -1,6 +1,6 @@
 # DevRag — AI Code Assistant with Retrieval-Augmented Generation
 
-**DevRag** is a production-ready system that helps developers get **source-cited, contextual answers** by searching through large open-source codebases. Instead of generic LLM hallucinations, it retrieves actual code snippets from real repositories and uses them to ground AI responses.
+DevRag is a developer-focused system that helps engineers get source-cited, contextual answers by searching indexed codebases and documentation. It retrieves code snippets and documentation, ranks them, and uses them to ground generated answers.
 
 ## 🎯 Core Problem
 
@@ -44,8 +44,8 @@ When asking an AI "How do I use Depends in FastAPI?", you get generic text—not
 │        └─ Fine-tunes top-20 → top-5 results                      │
 │                                                                   │
 │  4. LLM GENERATION (Optional)                                     │
-│     └─ Gemini API (with graceful fallback)                       │
-│        If rate-limited → return retrieval-only                   │
+│     └─ OpenAI Responses API (configurable model, default: gpt-5.4-mini) │
+│        If rate-limited or unavailable → return retrieval-only    │
 │                                                                   │
 │  Output: Answer + Source Citations                               │
 └─────────────────────────────────────────────────────────────────┘
@@ -67,7 +67,7 @@ When asking an AI "How do I use Depends in FastAPI?", you get generic text—not
 | **Vector DB** | FAISS (IndexFlatIP) | Fast cosine similarity search, < 1ms queries |
 | **Keyword Search** | bm25s | Handles exact phrase matching, complements vectors |
 | **Reranker** | cross-encoder/ms-marco-MiniLM | Refines top candidates, 95% faster than full reranking |
-| **LLM** | Gemini 2.0-flash | Free tier (with rate limit); optional local Ollama |
+| **LLM** | OpenAI Responses API (configurable model, default: `gpt-5.4-mini`) | Cloud LLM for answer generation; graceful retrieval-only fallback |
 | **API** | FastAPI | Async, type-safe, auto-docs, CORS-ready |
 | **Frontend** | React + Vite | SPA, ingest status polling, localStorage job tracking |
 | **Container** | Docker Compose | Redis + backend + optional Qdrant DB |
@@ -228,8 +228,8 @@ When you ingest `https://github.com/psf/requests`:
    - Find all `.py`, `.md`, `.txt` files
    - Skip `.git/`, `__pycache__/`, binaries
 
-3. **Chunk by AST** (parsing)
-   - Python: Split by function/class boundaries using tree-sitter
+3. **Chunking** (parsing)
+   - Python: Currently split using heuristics (function/class/top-level blocks). Tree-sitter AST chunking is planned to improve boundaries and context.
    - Markdown: Split by heading hierarchy
    - Each chunk carries: text, line numbers, relative path
 
@@ -278,7 +278,7 @@ When you ingest `https://github.com/psf/requests`:
 
 ### 4. **Results Section**
 - AI answer (if LLM available)
-- Fallback message if Gemini rate-limited
+- Fallback message if cloud LLM rate-limited or unavailable
 - Source snippets with filename:line-line citations
 - Relevance scores per chunk
 
@@ -288,7 +288,7 @@ When you ingest `https://github.com/psf/requests`:
 
 | Issue | Why | Workaround |
 |-------|-----|-----------|
-| **Gemini 429 rate-limits** | Free tier throttled | Add paid API key or use local Ollama (not set up yet) |
+| **Cloud LLM rate-limits** | Provider rate limits or network errors | Add paid API key, configure a local LLM fallback, or rely on retrieval-only responses |
 | **No Qdrant persistence** | Using FAISS only | Ready to switch; see docker-compose.yml commented section |
 | **BM25 not persisted** | Rebuilt each startup | Fine for demo; production → persist to file |
 | **No semantic caching** | Redis connected but unused | Feature ready; need cache similarity logic |
@@ -299,7 +299,7 @@ When you ingest `https://github.com/psf/requests`:
 ## 🏆 What This Demonstrates (For Resume)
 
 ✅ **Retrieval-Augmented Generation (RAG)**
-- Real data ingestion pipeline (tree-sitter AST chunking)
+- Real data ingestion pipeline (heuristic chunking; tree-sitter planned)
 - Hybrid search (vector + keyword)
 - Reranking (cross-encoder)
 

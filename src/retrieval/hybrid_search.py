@@ -44,13 +44,13 @@ def reciprocal_rank_fusion(
     fused: dict[str, dict] = {}
 
     for rank, (text, meta, score) in enumerate(vector_results, start=1):
-        key = f"{meta.get('relative_path')}:{meta.get('start_line')}"
+        key = _result_key(text, meta)
         if key not in fused:
             fused[key] = {"text": text, "meta": meta, "vector_score": score, "bm25_score": 0.0, "rrf": 0.0}
         fused[key]["rrf"] += 1.0 / (k + rank)
 
     for rank, (text, meta, score) in enumerate(bm25_results, start=1):
-        key = f"{meta.get('relative_path')}:{meta.get('start_line')}"
+        key = _result_key(text, meta)
         if key not in fused:
             fused[key] = {"text": text, "meta": meta, "vector_score": 0.0, "bm25_score": score, "rrf": 0.0}
         else:
@@ -60,6 +60,15 @@ def reciprocal_rank_fusion(
     # Sort by fused score and return
     sorted_results = sorted(fused.items(), key=lambda x: x[1]["rrf"], reverse=True)
     return [(item["text"], item["meta"], item["vector_score"], item["bm25_score"]) for _, item in sorted_results]
+
+
+def _result_key(text: str, metadata: dict) -> str:
+    """Build a stable identity for one indexed chunk across search backends."""
+
+    return "|".join(
+        str(metadata.get(field, ""))
+        for field in ("source_repo", "relative_path", "start_line", "end_line")
+    ) + f"|{text}"
 
 
 class BM25Wrapper:
@@ -83,14 +92,32 @@ class BM25Wrapper:
         self.retriever = bm25s.BM25()
         self.retriever.index(bm25s.tokenize(self.corpus))
 
-    def search(self, query: str, top_k: int = 5) -> list[tuple[str, dict, float]]:
+    def remove_repository(self, repository: str) -> None:
+        """Remove all documents belonging to one repository and rebuild BM25."""
+
+        kept = [
+            (text, metadata)
+            for text, metadata in zip(self.corpus, self.corpus_metadata)
+            if metadata.get("source_repo") != repository
+        ]
+        self.corpus = [text for text, _ in kept]
+        self.corpus_metadata = [metadata for _, metadata in kept]
+        self.retriever = bm25s.BM25() if self.corpus else None
+        if self.corpus:
+            self.retriever.index(bm25s.tokenize(self.corpus))
+
+    def search(self, query: str, top_k: int = 5, repository: str | None = None) -> list[tuple[str, dict, float]]:
         """Search for top-k documents by BM25 score."""
 
         if self.retriever is None or not self.corpus:
             return []
 
         query_tokens = bm25s.tokenize(query)
-        results, scores = self.retriever.retrieve(query_tokens, corpus=self.corpus, k=top_k)
+        # Filtering after a global top-k query can discard all matching chunks
+        # for a repository. Over-fetch the full corpus when a repository filter
+        # is requested, then return the best matching filtered documents.
+        retrieve_k = len(self.corpus) if repository else top_k
+        results, scores = self.retriever.retrieve(query_tokens, corpus=self.corpus, k=retrieve_k)
 
         output = []
         for result_list, score_list in zip(results, scores):
@@ -100,9 +127,15 @@ class BM25Wrapper:
                 except (TypeError, ValueError):
                     continue
                 if 0 <= index < len(self.corpus):
+                    if repository and self.corpus_metadata[index].get("source_repo") != repository:
+                        continue
                     numeric_score = float(score)
                     if numeric_score > 0:
                         output.append((self.corpus[index], self.corpus_metadata[index], numeric_score))
+                        if not repository and len(output) >= top_k:
+                            return output
+                        if repository and len(output) >= top_k:
+                            return output
         return output
 
 
@@ -141,6 +174,56 @@ class RerankerWrapper:
         for (text, meta, _, _), score in zip(results_list, scores):
             reranked.append((text, meta, float(score)))
 
-        # Sort by rerank score and return top-k
+        # Prefer evidence from distinct chunks and files. A single long file
+        # can otherwise occupy the whole context with near-duplicate sections.
         reranked.sort(key=lambda x: x[2], reverse=True)
-        return reranked[:top_k]
+        selected: list[tuple[str, dict, float]] = []
+        selected_keys: set[tuple[str, str, int | None, int | None]] = set()
+        path_counts: dict[str, int] = {}
+        max_chunks_per_path = 2
+
+        for item in reranked:
+            text, metadata, _ = item
+            chunk_key = (
+                str(metadata.get("source_repo", "")),
+                str(metadata.get("relative_path", "")),
+                metadata.get("start_line"),
+                metadata.get("end_line"),
+            )
+            path_key = f"{chunk_key[0]}|{chunk_key[1]}"
+            if chunk_key in selected_keys or path_counts.get(path_key, 0) >= max_chunks_per_path:
+                continue
+            selected.append(item)
+            selected_keys.add(chunk_key)
+            path_counts[path_key] = path_counts.get(path_key, 0) + 1
+            if len(selected) >= top_k:
+                break
+
+        # If one file is the only useful evidence, fill remaining slots with
+        # lower-ranked chunks after the diversity pass.
+        if len(selected) < top_k:
+            selected_keys = {
+                (
+                    str(metadata.get("source_repo", "")),
+                    str(metadata.get("relative_path", "")),
+                    metadata.get("start_line"),
+                    metadata.get("end_line"),
+                )
+                for _, metadata, _ in selected
+            }
+            for item in reranked:
+                text, metadata, _ = item
+                chunk_key = (
+                    str(metadata.get("source_repo", "")),
+                    str(metadata.get("relative_path", "")),
+                    metadata.get("start_line"),
+                    metadata.get("end_line"),
+                )
+                if chunk_key in selected_keys:
+                    continue
+                selected.append(item)
+                selected_keys.add(chunk_key)
+                if len(selected) >= top_k:
+                    break
+
+        return selected

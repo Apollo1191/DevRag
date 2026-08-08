@@ -123,6 +123,9 @@ class IngestionPipeline:
             if self.store is not None and embeddings:
                 if progress_callback is not None:
                     progress_callback("indexing", {"message": "Writing vectors to index"})
+                repository_name = repo_name or repo_path.name
+                self.store.clear_repository(repository_name)
+                self.bm25_store.remove_repository(repository_name)
                 self.store.add(embeddings, texts, metadatas)
                 self.bm25_store.add(texts, metadatas)
                 if self.store_dir is not None:

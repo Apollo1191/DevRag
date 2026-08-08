@@ -38,6 +38,10 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
         missing = [field for field in required if field not in case]
         if missing:
             raise ValueError(f"Line {line_number} is missing: {', '.join(missing)}")
+        if case["category"] not in {"in_domain", "casual", "out_of_domain"}:
+            raise ValueError(f"Line {line_number} has an unsupported category: {case['category']}")
+        if not isinstance(case["relevant_paths"], list):
+            raise ValueError(f"Line {line_number} relevant_paths must be a list")
         cases.append(case)
     return cases
 
@@ -56,15 +60,22 @@ def evaluate_case(client: httpx.Client, base_url: str, case: dict[str, Any], top
     started = time.perf_counter()
     response = client.post(
         f"{base_url.rstrip('/')}/query",
-        json={"question": case["question"], "top_k": top_k, "use_llm": with_llm},
+        json={
+            "question": case["question"],
+            "top_k": top_k,
+            "use_llm": with_llm,
+            "repository": case.get("repo"),
+        },
     )
     latency_ms = (time.perf_counter() - started) * 1000
     response.raise_for_status()
     body = response.json()
     chunks = body.get("chunks", [])
     expected_paths = case["relevant_paths"]
+    retrieval_applicable = case["category"] == "in_domain" and bool(expected_paths)
 
     matched_ranks: list[int] = []
+    matched_paths: set[str] = set()
     retrieved_paths: list[str] = []
     for rank, chunk in enumerate(chunks, start=1):
         metadata = chunk.get("metadata", {})
@@ -72,8 +83,14 @@ def evaluate_case(client: httpx.Client, base_url: str, case: dict[str, Any], top
         source_repo = str(metadata.get("source_repo") or "")
         if actual_path:
             retrieved_paths.append(actual_path)
-        if expected_paths and source_repo == case.get("repo") and any(path_matches(actual_path, expected) for expected in expected_paths):
-            matched_ranks.append(rank)
+        if retrieval_applicable and source_repo == case.get("repo"):
+            matching_expected = next(
+                (expected for expected in expected_paths if path_matches(actual_path, expected)),
+                None,
+            )
+            if matching_expected is not None:
+                matched_ranks.append(rank)
+                matched_paths.add(matching_expected)
 
     answer = str(body.get("answer") or "")
     citation_count = answer.count("[Source ")
@@ -85,11 +102,13 @@ def evaluate_case(client: httpx.Client, base_url: str, case: dict[str, Any], top
         "language": case["language"],
         "repo": case.get("repo"),
         "question": case["question"],
+        "retrieval_applicable": retrieval_applicable,
         "retrieved_paths": retrieved_paths,
         "matched_ranks": matched_ranks,
-        "hit_at_k": bool(matched_ranks),
-        "recall_at_k": min(len(set(matched_ranks)) / len(expected_paths), 1.0) if expected_paths else None,
-        "mrr": 1.0 / matched_ranks[0] if matched_ranks else 0.0,
+        "matched_expected_paths": sorted(matched_paths),
+        "hit_at_k": bool(matched_ranks) if retrieval_applicable else None,
+        "recall_at_k": len(matched_paths) / len(expected_paths) if retrieval_applicable else None,
+        "mrr": 1.0 / matched_ranks[0] if retrieval_applicable and matched_ranks else None,
         "behavior_pass": behavior_pass,
         "source_count": len(chunks),
         "answer_present": bool(answer),
@@ -113,7 +132,7 @@ def summarize(rows: list[dict[str, Any]], top_k: int, with_llm: bool) -> dict[st
     for row in rows:
         groups[row["category"]].append(row)
 
-    retrieval_rows = [row for row in rows if row["category"] == "in_domain"]
+    retrieval_rows = [row for row in rows if row["retrieval_applicable"]]
     behavior_rows = [row for row in rows if row["category"] != "in_domain"]
     latency_values = [row["latency_ms"] for row in rows]
     summary: dict[str, Any] = {
@@ -122,6 +141,7 @@ def summarize(rows: list[dict[str, Any]], top_k: int, with_llm: bool) -> dict[st
         "phases": {
             "retrieval": {
                 "questions": len(retrieval_rows),
+                "metric_scope": "cases with category=in_domain and non-empty relevant_paths",
                 f"hit_at_{top_k}": mean(retrieval_rows, "hit_at_k"),
                 f"recall_at_{top_k}": mean(retrieval_rows, "recall_at_k"),
                 "mrr": mean(retrieval_rows, "mrr"),
@@ -138,7 +158,10 @@ def summarize(rows: list[dict[str, Any]], top_k: int, with_llm: bool) -> dict[st
         "by_category": {
             category: {
                 "questions": len(category_rows),
-                "hit_rate": mean(category_rows, "hit_at_k"),
+                "retrieval_questions": sum(row["retrieval_applicable"] for row in category_rows),
+                "hit_rate": mean([row for row in category_rows if row["retrieval_applicable"]], "hit_at_k")
+                if any(row["retrieval_applicable"] for row in category_rows)
+                else None,
                 "behavior_pass_rate": mean(category_rows, "behavior_pass"),
                 "answer_rate": mean(category_rows, "answer_present") if with_llm else None,
                 "citation_rate": mean([{"value": row["citation_count"] > 0} for row in category_rows], "value") if with_llm else None,

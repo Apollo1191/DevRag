@@ -51,7 +51,12 @@ def evaluate_case(client: httpx.Client, base_url: str, case: dict[str, Any], top
 
     response = client.post(
         f"{base_url.rstrip('/')}/query",
-        json={"question": case["question"], "top_k": top_k, "use_llm": False},
+        json={
+            "question": case["question"],
+            "top_k": top_k,
+            "use_llm": False,
+            "repository": case.get("repo"),
+        },
     )
     response.raise_for_status()
     body = response.json()

@@ -63,6 +63,7 @@ function MarkdownMessage({ content }: { content: string }) {
 export function AppWorkspace() {
   const [question, setQuestion] = useState(QUICK_QUESTIONS[0]);
   const [topK, setTopK] = useState(5);
+  const [selectedRepository, setSelectedRepository] = useState("all");
   const [useLlm, setUseLlm] = useState(true);
   const [queryLoading, setQueryLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -198,7 +199,12 @@ export function AppWorkspace() {
       const response = await fetch(`${API_BASE}/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: trimmedQuestion, top_k: topK, use_llm: useLlm }),
+        body: JSON.stringify({
+          question: trimmedQuestion,
+          top_k: topK,
+          use_llm: useLlm,
+          repository: selectedRepository === "all" ? null : selectedRepository,
+        }),
       });
       if (!response.ok) throw new Error(await response.text() || "Query failed");
       const result = await response.json() as QueryResponse;
@@ -261,7 +267,7 @@ export function AppWorkspace() {
           <div ref={conversationEndRef} />
         </section>
 
-        <form className="composer" onSubmit={handleQuery}><textarea value={question} onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setQuestion(event.target.value)} placeholder="Ask about a function, request flow, exception, or file..." rows={3} /><div className="composer-footer"><div className="mode-switch"><button type="button" className={!useLlm ? "selected" : ""} onClick={() => setUseLlm(false)}>Sources only</button><button type="button" className={useLlm ? "selected" : ""} onClick={() => setUseLlm(true)}>Answer with OpenAI</button></div><div className="composer-right"><label>Top K <select value={topK} onChange={(event) => setTopK(Number(event.target.value))}>{[3, 5, 8, 10].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><button className="send-button" disabled={queryLoading || !question.trim()}>{queryLoading ? "Searching..." : "Ask DevRag"}<span>↗</span></button></div></div></form>
+        <form className="composer" onSubmit={handleQuery}><textarea value={question} onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setQuestion(event.target.value)} placeholder="Ask about a function, request flow, exception, or file..." rows={3} /><div className="composer-footer"><div className="mode-switch"><button type="button" className={!useLlm ? "selected" : ""} onClick={() => setUseLlm(false)}>Sources only</button><button type="button" className={useLlm ? "selected" : ""} onClick={() => setUseLlm(true)}>Answer with OpenAI</button></div><div className="composer-right"><label>Repository <select value={selectedRepository} onChange={(event) => setSelectedRepository(event.target.value)}><option value="all">All repositories</option>{indexedRepos.map((repo) => <option key={repo.label || repo.store_path} value={repo.label || ""}>{repo.label}</option>)}</select></label><label>Top K <select value={topK} onChange={(event) => setTopK(Number(event.target.value))}>{[3, 5, 8, 10].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><button className="send-button" disabled={queryLoading || !question.trim()}>{queryLoading ? "Searching..." : "Ask DevRag"}<span>↗</span></button></div></div></form>
         {error ? <div className="error-banner">{error}</div> : null}
       </main>
 
